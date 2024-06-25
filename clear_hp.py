@@ -8,6 +8,18 @@ import time
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+COMMON_FOOTERS_XPATH = [
+    "//footer",
+    "//div[contains(@class, 'footer')]",
+    "//div[contains(@id, 'footer')]",
+    "//div[contains(@class, 'bottom')]",
+    "//div[contains(@id, 'bottom')]",
+    "//div[contains(@class, 'copyright')]",
+    "//div[contains(@id, 'copyright')]",
+    "//div[contains(@class, 'legal')]",
+    "//div[contains(@id, 'legal')]"
+]
+
 def parse_html(content):
     """Parse the HTML content and return the root element."""
     return html.fromstring(content)
@@ -26,6 +38,14 @@ def remove_empty_elements(soup):
             if parent is not None:
                 parent.remove(element)
 
+def remove_common_footers(soup):
+    """Remove common footer elements."""
+    for footer_xpath in COMMON_FOOTERS_XPATH:
+        for element in soup.xpath(footer_xpath):
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+
 def remove_similar_elements(parent_soup, child_soup):
     """Remove elements from child_soup that have similar content as in parent_soup."""
     parent_text_dict = {parent_element.text_content().strip(): parent_element for parent_element in parent_soup.xpath('//*') if parent_element.text_content().strip()}
@@ -40,39 +60,22 @@ def remove_similar_elements(parent_soup, child_soup):
     remove_empty_elements(child_soup)
     return child_soup
 
-def extract_main_content(soup):
-    """Extract the main content of the page."""
-    main_content = soup.xpath('//main')
-    if not main_content:
-        main_content = soup.xpath('//body')
-    return main_content[0] if main_content else None
-
-def find_body_html_by_url(data, url):
-    """Find the body HTML content by URL."""
-    for company in data.get('data', []):
-        if company.get('url') == url:
-            return company.get('body_html')
-    return None
-
-def compare_endings(parent_soup, child_soup, initial_segment_length=500, max_check_length=2000):
+def compare_endings(parent_soup, child_soup):
     """Compare the endings of the parent and child content and truncate the child content if necessary."""
     parent_text = parent_soup.text_content().strip()
     child_text = child_soup.text_content().strip()
 
-    segment_length = initial_segment_length
+    parent_end = parent_text
+    child_end = child_text
 
-    while segment_length <= max_check_length:
-        parent_end = parent_text[-segment_length:]
-        child_end = child_text[-segment_length:]
-
-        if parent_end == child_end:
-            # 查找最后匹配的节点并从此节点进行截断，确保HTML结构的完整性
-            for elem in reversed(list(child_soup.iter())):
-                if elem.text and elem.text.endswith(parent_end):
-                    elem.text = elem.text[:-len(parent_end)].strip()
-                    break
-            break
-        segment_length += initial_segment_length
+    if parent_end == child_end:
+        # 使用xpath找到最后一个匹配的节点并删除该节点及其之后的所有节点
+        elements = child_soup.xpath(f'//*[contains(text(), "{parent_end}")]')
+        if elements:
+            last_element = elements[-1]
+            parent = last_element.getparent()
+            if parent is not None:
+                parent.remove(last_element)
 
     return child_soup
 
@@ -86,12 +89,14 @@ def process_company_data(company, parent_data):
     child_soup = parse_html(url_html_content) if url_html_content else None
 
     if child_soup:
+        remove_common_footers(child_soup)
         if parent_soup:
             logging.info(f"Removing similar elements for company: {company.get('url')}")
             child_soup = remove_similar_elements(parent_soup, child_soup)
             logging.info(f"Comparing endings for company: {company.get('url')}")
             child_soup = compare_endings(parent_soup, child_soup)
 
+        remove_empty_elements(child_soup)
         company['body_html_new'] = html.tostring(child_soup, encoding='unicode', method='html')
         company['body_new'] = child_soup.text_content().strip()
     else:
@@ -99,6 +104,12 @@ def process_company_data(company, parent_data):
         company['body_new'] = ''
 
     return company
+
+def process_parent_page(parent_soup):
+    """Process parent page by removing common footers and empty elements."""
+    remove_common_footers(parent_soup)
+    remove_empty_elements(parent_soup)
+    return parent_soup
 
 def process_file(src_file, dst_folder):
     """Process each file and save the processed data."""
@@ -122,7 +133,11 @@ def process_file(src_file, dst_folder):
         p_url = company.get('p_url')
         url_html_content = find_body_html_by_url(data, p_url)
         if url_html_content:
-            parent_data[p_url] = parse_html(url_html_content)
+            parent_soup = parse_html(url_html_content)
+            parent_soup = process_parent_page(parent_soup)
+            parent_data[p_url] = parent_soup
+            company['body_html_new'] = html.tostring(parent_soup, encoding='unicode', method='html')
+            company['body_new'] = parent_soup.text_content().strip()
 
     for company in data.get('data', []):
         updated_data["data"].append(process_company_data(company, parent_data))
@@ -131,6 +146,13 @@ def process_file(src_file, dst_folder):
     with open(dst_file, 'w', encoding='utf-8') as f:
         json.dump(updated_data, f, ensure_ascii=False, indent=4)
     logging.info(f"Processed and saved: {dst_file}")
+
+def find_body_html_by_url(data, url):
+    """Find the body HTML content by URL."""
+    for company in data.get('data', []):
+        if company.get('url') == url:
+            return company.get('body_html')
+    return None
 
 def process_json_files_in_folder(src_folder, dst_folder, max_processes=None):
     """Process all JSON files in a folder using multiple processes."""
