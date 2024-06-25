@@ -12,7 +12,6 @@ COMMON_FOOTERS_XPATH = [
     "//footer",
     "//div[contains(@class, 'footer')]",
     "//div[contains(@id, 'footer')]",
-    "//div[contains(@class, 'bottom')]",
     "//div[contains(@id, 'bottom')]",
     "//div[contains(@class, 'copyright')]",
     "//div[contains(@id, 'copyright')]",
@@ -25,13 +24,13 @@ def parse_html(content):
     return html.fromstring(content)
 
 def is_empty_element(element):
-    """Check if an element is empty (no text content and no child elements) and is not a comment."""
+    """Check if an element is empty (no text content, no child elements, and no attributes) and is not a comment."""
     if isinstance(element, HtmlComment):
-        return False
-    return not (element.text_content().strip() or len(element))
+        return True
+    return not (element.text_content().strip() or len(element) or element.attrib)
 
 def remove_empty_elements(soup):
-    """Remove elements that have no content and propagate this up the tree."""
+    """Remove elements that have no content, attributes, or child elements."""
     for element in reversed(list(soup.iter())):
         if is_empty_element(element):
             parent = element.getparent()
@@ -105,11 +104,14 @@ def process_company_data(company, parent_data):
 
     return company
 
-def process_parent_page(parent_soup):
-    """Process parent page by removing common footers and empty elements."""
-    remove_common_footers(parent_soup)
-    remove_empty_elements(parent_soup)
-    return parent_soup
+def clean_empty_elements_in_body_html_new(company):
+    """Clean empty elements in the body_html_new field of a company."""
+    body_html_new = company.get('body_html_new', '')
+    if body_html_new:
+        soup = parse_html(body_html_new)
+        remove_empty_elements(soup)
+        company['body_html_new'] = html.tostring(soup, encoding='unicode', method='html')
+    return company
 
 def process_file(src_file, dst_folder):
     """Process each file and save the processed data."""
@@ -123,24 +125,37 @@ def process_file(src_file, dst_folder):
 
     updated_data = {"data": []}
     parent_data = {}
+    processed_urls = set()
     has_body_html = any(company.get('body_html') for company in data.get('data', []))
 
     if not has_body_html:
         logging.warning(f"Skipping file {src_file} due to missing body_html")
         return
 
+    # 处理父页面
     for company in data.get('data', []):
-        p_url = company.get('p_url')
-        url_html_content = find_body_html_by_url(data, p_url)
-        if url_html_content:
-            parent_soup = parse_html(url_html_content)
-            parent_soup = process_parent_page(parent_soup)
-            parent_data[p_url] = parent_soup
-            company['body_html_new'] = html.tostring(parent_soup, encoding='unicode', method='html')
-            company['body_new'] = parent_soup.text_content().strip()
+        if not company.get('p_url'):  # 没有 p_url 的页面作为父页面
+            updated_data["data"].append(process_company_data(company, parent_data))
+            parent_data[company.get('url')] = parse_html(company['body_html'])
+            processed_urls.add(company.get('url'))
 
-    for company in data.get('data', []):
-        updated_data["data"].append(process_company_data(company, parent_data))
+    # 处理所有层级的子页面
+    levels = 1
+    while True:
+        current_level_companies = [company for company in data.get('data', []) if company.get('p_url') in parent_data and company.get('url') not in processed_urls]
+        if not current_level_companies:
+            break
+
+        for company in current_level_companies:
+            updated_data["data"].append(process_company_data(company, parent_data))
+            parent_data[company.get('url')] = parse_html(company['body_html'])
+            processed_urls.add(company.get('url'))
+        
+        levels += 1
+
+    # 清理 body_html_new 中内容为空的标签
+    for company in updated_data["data"]:
+        clean_empty_elements_in_body_html_new(company)
 
     dst_file = os.path.join(dst_folder, os.path.basename(src_file))
     with open(dst_file, 'w', encoding='utf-8') as f:
@@ -159,7 +174,7 @@ def process_json_files_in_folder(src_folder, dst_folder, max_processes=None):
     if not os.path.exists(dst_folder):
         os.makedirs(dst_folder)
 
-    files = [os.path.join(src_folder, filename) for filename in os.listdir(src_folder) if filename.endswith('.json')]
+    files = [os.path.join(src_folder, filename) for filename in os.listdir(src_folder) if filename.endswith('_hp.json')]
 
     if max_processes is None:
         max_processes = min(len(files), cpu_count())
@@ -179,8 +194,9 @@ def process_json_files_in_folder(src_folder, dst_folder, max_processes=None):
     logging.info(f"Average time per file: {avg_time_per_file:.2f} seconds")
 
 if __name__ == '__main__':
-    src_folder = 'source_folder'  # 请将此处替换为包含JSON文件的源文件夹路径
+    src_folder = 'info'  # 请将此处替换为包含JSON文件的源文件夹路径
     dst_folder = 'test_output'    # 请将此处替换为目标文件夹路径
     max_processes = None  # 可选：设置为None时，使用全部文件数目，否则设置为你想要的最大进程数量
 
     process_json_files_in_folder(src_folder, dst_folder, max_processes)
+
