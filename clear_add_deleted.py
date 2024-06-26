@@ -74,12 +74,8 @@ def compare_endings(parent_soup, child_soup):
         parent_text = parent_soup.text_content().strip() if parent_soup.text_content() else ""
         child_text = child_soup.text_content().strip() if child_soup.text_content() else ""
 
-        parent_end = parent_text[-1000:]  # 使用最后1000字符进行比较
-        child_end = child_text[-1000:]
-
-        if parent_end == child_end:
-            # 使用xpath找到最后一个匹配的节点并删除该节点及其之后的所有节点
-            elements = child_soup.xpath(f'//*[contains(text(), "{parent_end}")]')
+        if parent_text.endswith(child_text):
+            elements = child_soup.xpath(f'//*[contains(text(), "{child_text}")]')
             if elements:
                 last_element = elements[-1]
                 parent = last_element.getparent()
@@ -128,8 +124,6 @@ def process_child_company(company, parent_data):
     logging.info(f"Processing child company: {company.get('url')}")
     url_html_content = company.get('body_html')
 
-    deleted_content = []
-
     # 从父页面中选择一个 p_url 为空字符串的页面进行对比
     potential_parents = [parent for parent in parent_data if parent.get('p_url') == '']
     parent_soup = None
@@ -140,21 +134,20 @@ def process_child_company(company, parent_data):
     child_soup = parse_html(url_html_content)
 
     if child_soup is not None:
-        deleted_content.extend(remove_common_footers(child_soup))
+        remove_common_footers(child_soup)
         if parent_soup is not None:
-            deleted_content.extend(remove_similar_elements(parent_soup, child_soup))
-            deleted_content.extend(compare_endings(parent_soup, child_soup))
+            remove_similar_elements(parent_soup, child_soup)
+            compare_endings(parent_soup, child_soup)
 
         remove_empty_elements(child_soup)
         company['body_html_new'] = html.tostring(child_soup, encoding='unicode', method='html')
         company['body_new'] = child_soup.text_content().strip() if child_soup.text_content() else ''
-        company['body_html_deleted'] = ''.join(deleted_content)
-        company['body_deleted'] = ''.join([html.fromstring(content).text_content().strip() for content in deleted_content])
+        # 不记录子页面的删除内容
+        company.pop('body_html_deleted', None)
+        company.pop('body_deleted', None)
     else:
         company['body_html_new'] = ''
         company['body_new'] = ''
-        company['body_html_deleted'] = ''
-        company['body_deleted'] = ''
 
     return company
 
@@ -248,8 +241,8 @@ def process_json_files_in_folder(src_folder, dst_folder, max_processes=None):
     logging.info(f"Average time per file: {avg_time_per_file:.2f} seconds")
 
 if __name__ == '__main__':
-    src_folder = 'test'  # 请将此处替换为包含JSON文件的源文件夹路径
-    dst_folder = 'test_output1'    # 请将此处替换为目标文件夹路径
+    src_folder = 'info'  # 请将此处替换为包含JSON文件的源文件夹路径
+    dst_folder = 'test_output2'    # 请将此处替换为目标文件夹路径
     max_processes = None  # 可选：设置为None时，使用全部文件数目，否则设置为你想要的最大进程数量
 
     process_json_files_in_folder(src_folder, dst_folder, max_processes)
