@@ -182,15 +182,15 @@ def process_file(src_file, dst_folder, stats):
 
     child_data = [company for company in data.get('data', []) if company.get('p_url')]
 
-    # 处理父页面
+    # 处理主页面
     for company in data.get('data', []):
-        if company.get('p_url') == '':  # p_url为空字符串的页面作为父页面
+        if company.get('p_url') == '':  # p_url为空字符串的页面作为主页面
             parent_data.append(company)
             processed_company = process_parent_company(company, child_data)
             updated_data["data"].append(processed_company)
             processed_urls.add(company.get('url'))
 
-    # 处理子页面
+    # 处理其他页面
     for company in child_data:
         processed_company = process_child_company(company, parent_data)
         updated_data["data"].append(processed_company)
@@ -241,7 +241,7 @@ def process_json_files_in_folder(src_folder, dst_folder, max_processes=None):
     logging.info(f"Average time per file: {avg_time_per_file:.2f} seconds")
 
 if __name__ == '__main__':
-    src_folder = 'info'  # 请将此处替换为包含JSON文件的源文件夹路径
+    src_folder = 'test'  # 请将此处替换为包含JSON文件的源文件夹路径
     dst_folder = 'test_output2'    # 请将此处替换为目标文件夹路径
     max_processes = None  # 可选：设置为None时，使用全部文件数目，否则设置为你想要的最大进程数量
 
